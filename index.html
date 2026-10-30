@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#121418">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Converter">
+  <title>Converter Studio</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <button id="backBtn" class="iconbtn" aria-label="Back to home" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+    </button>
+    <h1 id="title">Converter Studio</h1>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <!-- HOME -->
+    <section id="view-home" class="view" aria-labelledby="title">
+      <p class="lede">Pick a tool.</p>
+      <ul class="tiles" role="list">
+        <li><button class="tile t-convert" data-go="convert">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>
+          <span class="tname">Convert</span><span class="tdesc">Images, audio, video. Batches too.</span>
+        </button></li>
+        <li><button class="tile t-image" data-soon="Image editing, background removal and image-to-JSON arrive in step 3.">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg>
+          <span class="tname">Image</span><span class="tdesc">Edit, remove BG, to JSON</span><span class="soon">Step 3</span>
+        </button></li>
+        <li><button class="tile t-audio" data-soon="Noise cleanup, stems and the multitrack studio arrive in steps 2 and 4.">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h2M7 8v8M11 5v14M15 9v6M19 7v10M21 12h0"/></svg>
+          <span class="tname">Audio</span><span class="tdesc">Clean, stems, studio</span><span class="soon">Step 2</span>
+        </button></li>
+        <li><button class="tile t-midi" data-soon="Audio-to-MIDI for FL Studio arrives in step 2.">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v10M12 4v10M16 4v10M6 14h4M14 14h4"/></svg>
+          <span class="tname">MIDI</span><span class="tdesc">Hum, play, beatbox to .mid</span><span class="soon">Step 2</span>
+        </button></li>
+        <li><button class="tile t-video" data-soon="The multitrack video editor and 4K upscaling arrive in step 5.">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>
+          <span class="tname">Video</span><span class="tdesc">Edit, captions, 4K</span><span class="soon">Step 5</span>
+        </button></li>
+        <li><button class="tile t-md" data-soon="The .md generator for Claude, Grok and Gemini arrives in step 3.">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>
+          <span class="tname">.md</span><span class="tdesc">Prompts for any AI</span><span class="soon">Step 3</span>
+        </button></li>
+      </ul>
+    </section>
+
+    <!-- CONVERT -->
+    <section id="view-convert" class="view" hidden aria-label="Convert">
+      <div class="card">
+        <label class="drop" id="drop">
+          <input id="fileInput" type="file" multiple accept="image/*,audio/*,video/*,.heic,.heif,.mid,.flac,.opus,.mkv">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>
+          <span><strong>Choose files</strong><br><small>Photos, music, videos. Pick as many as you like.</small></span>
+        </label>
+        <p id="fileSummary" class="muted" aria-live="polite"></p>
+      </div>
+
+      <div class="card" id="optsCard" hidden>
+        <div id="targets"></div>
+        <div id="imageOpts" class="opts" hidden>
+          <label>Quality <output id="qOut">85</output>%
+            <input id="quality" type="range" min="30" max="100" value="85">
+          </label>
+          <label>Max size
+            <select id="maxSize">
+              <option value="0">Original</option>
+              <option value="4096">4096 px</option>
+              <option value="2048">2048 px</option>
+              <option value="1080">1080 px</option>
+              <option value="512">512 px</option>
+            </select>
+          </label>
+          <label class="check" id="combineWrap" hidden><input id="combinePdf" type="checkbox" checked> Combine into one PDF</label>
+        </div>
+        <div id="avOpts" class="opts" hidden>
+          <label id="resWrap">Resolution
+            <select id="res">
+              <option value="0">Original</option>
+              <option value="1080">1080p</option>
+              <option value="720">720p</option>
+              <option value="480">480p</option>
+            </select>
+          </label>
+          <label>Audio bitrate
+            <select id="abr">
+              <option value="320k">320 kbps</option>
+              <option value="192k" selected>192 kbps</option>
+              <option value="128k">128 kbps</option>
+            </select>
+          </label>
+        </div>
+        <p id="formatNote" class="muted small"></p>
+        <button id="goBtn" class="primary">Convert</button>
+      </div>
+
+      <div class="card" id="resultsCard" hidden>
+        <div class="row between">
+          <h2>Results</h2>
+          <span id="overall" class="muted" aria-live="polite"></span>
+        </div>
+        <ul id="results" class="results" role="list"></ul>
+        <div class="row gap" id="bulk" hidden>
+          <button id="shareAll" class="primary">Save / Share all</button>
+          <button id="zipAll" class="ghost">Download .zip</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
