@@ -1,35 +1,75 @@
 // On-device image conversion. Decode (incl. HEIC) -> canvas -> encode.
-const MAX_PIXELS = 16_000_000; // iOS Safari canvas limit is ~16.7MP
+export const MAX_PIXELS = 16_000_000; // iOS Safari canvas limit is ~16.7MP
 
-let heicLoaded;
-function loadScript(src) {
-  return new Promise((res, rej) => {
-    const s = document.createElement('script');
-    s.src = src; s.onload = res; s.onerror = () => rej(new Error('Could not load ' + src));
-    document.head.appendChild(s);
-  });
-}
+import { loadScript } from './ui.js';
 
+export const RAW_EXT = /\.(dng|cr2|cr3|nef|nrw|arw|srf|sr2|orf|rw2|raf|pef|srw|erf|3fr|kdc|dcr|mrw|x3f|rwl|iiq)$/i;
 export function isHeic(file) {
   return /image\/hei[cf]/i.test(file.type) || /\.(heic|heif)$/i.test(file.name);
 }
 
-async function decode(file) {
-  // Safari (iPhone) decodes HEIC natively; Chrome/Edge on Windows does not.
+// Camera RAW files embed a full-size JPEG preview; pull out the biggest one.
+async function rawPreview(file) {
+  const u8 = new Uint8Array(await file.arrayBuffer());
+  let best = null;
+  for (let i = 0; i < u8.length - 3; i++) {
+    if (u8[i] === 0xff && u8[i + 1] === 0xd8 && u8[i + 2] === 0xff) {
+      // walk JPEG segments to find EOI robustly
+      let j = i + 2, ok = false;
+      while (j < u8.length - 1) {
+        if (u8[j] !== 0xff) break;
+        const m = u8[j + 1];
+        if (m === 0xd9) { j += 2; ok = true; break; }
+        if (m === 0xda) { // scan data: find next marker FFD9
+          j += 2 + ((u8[j + 2] << 8) | u8[j + 3]);
+          while (j < u8.length - 1 && !(u8[j] === 0xff && u8[j + 1] === 0xd9)) j++;
+          j += 2; ok = true; break;
+        }
+        if (m >= 0xd0 && m <= 0xd7 || m === 0x01) { j += 2; continue; }
+        j += 2 + ((u8[j + 2] << 8) | u8[j + 3]);
+      }
+      if (ok && (!best || j - i > best[1] - best[0])) best = [i, j];
+      if (ok) i = j - 1;
+    }
+  }
+  if (!best || best[1] - best[0] < 20000) throw new Error('No preview image found in this RAW file');
+  return new Blob([u8.subarray(best[0], best[1])], { type: 'image/jpeg' });
+}
+
+async function tiffDecode(file) {
+  const { default: UTIF } = await import('../vendor/utif.mjs');
+  const buf = await file.arrayBuffer();
+  const ifds = UTIF.decode(buf);
+  const page = ifds.reduce((a, b) => ((b.width || 0) * (b.height || 0) > (a.width || 0) * (a.height || 0) ? b : a), ifds[0]);
+  UTIF.decodeImage(buf, page);
+  const rgba = UTIF.toRGBA8(page);
+  return await createImageBitmap(new ImageData(new Uint8ClampedArray(rgba.buffer), page.width, page.height));
+}
+
+async function psdDecode(file) {
+  const { readPsd } = await import('../vendor/psd.mjs');
+  const psd = readPsd(await file.arrayBuffer(), { skipLayerImageData: true, skipThumbnail: true, useImageData: true });
+  if (!psd.imageData) throw new Error('This PSD has no flattened image (save with “Maximize compatibility”)');
+  return await createImageBitmap(new ImageData(new Uint8ClampedArray(psd.imageData.data), psd.width, psd.height));
+}
+
+export async function decodeImage(file) {
+  const name = file.name || '';
+  if (RAW_EXT.test(name)) return await createImageBitmap(await rawPreview(file), { imageOrientation: 'from-image' });
+  if (/\.psd$/i.test(name) || file.type === 'image/vnd.adobe.photoshop') return await psdDecode(file);
+  // Safari (iPhone) decodes HEIC and TIFF natively; Chrome/Edge on Windows does not.
   try {
     return await createImageBitmap(file, { imageOrientation: 'from-image' });
   } catch (e) {
-    if (!isHeic(file)) {
-      // Fallback via <img> for formats createImageBitmap rejects (e.g. SVG)
-      return await imgDecode(file);
-    }
+    if (/\.tiff?$/i.test(name) || file.type === 'image/tiff') return await tiffDecode(file);
+    if (!isHeic(file)) return await imgDecode(file);
   }
-  heicLoaded ??= loadScript('vendor/heic2any.min.js');
-  await heicLoaded;
+  await loadScript('vendor/heic2any.min.js');
   let out = await window.heic2any({ blob: file, toType: 'image/png' });
   if (Array.isArray(out)) out = out[0];
   return await createImageBitmap(out);
 }
+const decode = decodeImage;
 
 function imgDecode(blob) {
   return new Promise((res, rej) => {
@@ -48,7 +88,7 @@ function fitSize(w, h, maxSide) {
   return { w: Math.max(1, Math.round(w * s)), h: Math.max(1, Math.round(h * s)), scaled: s < 1 };
 }
 
-function toCanvas(bmp, maxSide, flatten) {
+export function toCanvas(bmp, maxSide, flatten) {
   const { w, h } = fitSize(bmp.width, bmp.height, maxSide);
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
@@ -59,7 +99,7 @@ function toCanvas(bmp, maxSide, flatten) {
   return c;
 }
 
-const canvasBlob = (c, type, q) => new Promise((res, rej) =>
+export const canvasBlob = (c, type, q) => new Promise((res, rej) =>
   c.toBlob(b => b ? res(b) : rej(new Error('Encoding failed')), type, q));
 
 // ---------- simple writers ----------
@@ -144,6 +184,30 @@ async function avifEncode(c, q) {
   return new Blob([await encode(img, { quality: q, speed: 8 })], { type: 'image/avif' });
 }
 
+async function jxlEncode(c, q) {
+  const { default: encode } = await import('../vendor/jsquash/jxl/encode.js');
+  const img = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+  return new Blob([await encode(img, { quality: q, effort: 5 })], { type: 'image/jxl' });
+}
+
+function tgaEncode(c) {
+  const { width: w, height: h } = c;
+  const px = c.getContext('2d').getImageData(0, 0, w, h).data;
+  const out = new Uint8Array(18 + w * h * 4);
+  out[2] = 2; out[12] = w & 255; out[13] = w >> 8; out[14] = h & 255; out[15] = h >> 8; out[16] = 32; out[17] = 0x28;
+  for (let i = 0, o = 18; i < px.length; i += 4) { out[o++] = px[i + 2]; out[o++] = px[i + 1]; out[o++] = px[i]; out[o++] = px[i + 3]; }
+  return new Blob([out], { type: 'image/x-tga' });
+}
+
+function ppmEncode(c) {
+  const { width: w, height: h } = c;
+  const px = c.getContext('2d').getImageData(0, 0, w, h).data;
+  const head = new TextEncoder().encode(`P6\n${w} ${h}\n255\n`);
+  const out = new Uint8Array(head.length + w * h * 3); out.set(head);
+  for (let i = 0, o = head.length; i < px.length; i += 4) { out[o++] = px[i]; out[o++] = px[i + 1]; out[o++] = px[i + 2]; }
+  return new Blob([out], { type: 'image/x-portable-pixmap' });
+}
+
 // ---------- PDF (JPEG pages) ----------
 export async function pdfFromCanvases(pages) {
   // pages: [{canvas, q}]
@@ -178,7 +242,7 @@ export async function pdfFromCanvases(pages) {
   return new Blob(parts, { type: 'application/pdf' });
 }
 
-export const IMAGE_TARGETS = ['jpg', 'png', 'webp', 'avif', 'gif', 'tiff', 'bmp', 'ico', 'pdf', 'svg'];
+export const IMAGE_TARGETS = ['jpg', 'png', 'webp', 'avif', 'jxl', 'gif', 'tiff', 'bmp', 'ico', 'tga', 'ppm', 'pdf', 'svg'];
 
 export async function prepareCanvas(file, { maxSide = 0, flatten = false } = {}) {
   const bmp = await decode(file);
@@ -192,7 +256,7 @@ export async function convertImage(file, target, { quality = 85, maxSide = 0 } =
   if (target === 'ico') {
     const bmp = await decode(file); const b = await icoEncode(bmp); bmp.close?.(); return { blob: b };
   }
-  const flatten = ['jpg', 'bmp', 'pdf'].includes(target);
+  const flatten = ['jpg', 'bmp', 'pdf', 'ppm'].includes(target);
   const { canvas: c, autoScaled } = await prepareCanvas(file, { maxSide, flatten });
   let blob;
   switch (target) {
@@ -204,9 +268,46 @@ export async function convertImage(file, target, { quality = 85, maxSide = 0 } =
     case 'tiff': blob = tiffEncode(c); break;
     case 'bmp': blob = bmpEncode(c); break;
     case 'svg': blob = await svgEncode(c); break;
+    case 'jxl': blob = await jxlEncode(c, quality); break;
+    case 'tga': blob = tgaEncode(c); break;
+    case 'ppm': blob = ppmEncode(c); break;
     case 'pdf': blob = await pdfFromCanvases([{ canvas: c, q: quality }]); break;
     default: throw new Error('Unsupported format');
   }
   c.width = c.height = 0; // free memory on iOS
   return { blob, autoScaled };
+}
+
+// Encode an already-edited canvas (used by the Image editor)
+export async function encodeCanvas(c, target, quality = 90) {
+  switch (target) {
+    case 'jpg': { const f = document.createElement('canvas'); f.width = c.width; f.height = c.height; const x = f.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, f.width, f.height); x.drawImage(c, 0, 0); return canvasBlob(f, 'image/jpeg', quality / 100); }
+    case 'png': return canvasBlob(c, 'image/png');
+    case 'webp': return webpEncode(c, quality);
+    case 'avif': return avifEncode(c, quality);
+    case 'jxl': return jxlEncode(c, quality);
+    case 'gif': return gifEncode(c);
+    case 'tiff': return tiffEncode(c);
+    case 'bmp': return bmpEncode(c);
+    case 'svg': return svgEncode(c);
+    case 'pdf': return pdfFromCanvases([{ canvas: c, q: quality }]);
+    default: throw new Error('Unsupported format');
+  }
+}
+
+// Compress to fit a size budget (binary search on quality, then downscale)
+export async function encodeUnder(c, target, maxBytes) {
+  let lo = 20, hi = 95, best = null, src = c;
+  for (let pass = 0; pass < 4; pass++) {
+    for (let i = 0; i < 7; i++) {
+      const q = Math.round((lo + hi) / 2);
+      const b = await encodeCanvas(src, target, q);
+      if (b.size <= maxBytes) { best = b; lo = q + 1; } else hi = q - 1;
+      if (lo > hi) break;
+    }
+    if (best) return best;
+    const s = document.createElement('canvas'); s.width = Math.round(src.width * 0.75); s.height = Math.round(src.height * 0.75);
+    s.getContext('2d').drawImage(src, 0, 0, s.width, s.height); src = s; lo = 20; hi = 90;
+  }
+  return await encodeCanvas(src, target, 20);
 }
